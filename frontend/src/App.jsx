@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Chart from "./Chart.jsx";
 import { loadSample, postJson, uploadCsv } from "./api.js";
+import symbol from "./assets/symbol.png";
 
 const STEPS = [
   ["1", "Load"],
@@ -10,7 +11,56 @@ const STEPS = [
   ["5", "Relations"],
   ["6", "Prepare"],
   ["7", "Insights"],
+  ["8", "Architecture"],
 ];
+
+function Architecture() {
+  return (
+    <section>
+      <p className="kicker">System architecture</p>
+      <p className="muted">
+        How EDA Studio turns a CSV into quality checks, charts, and model-ready recommendations.
+      </p>
+      <div className="arch-layers">
+        <article>
+          <p className="kicker">Client</p>
+          <h3>React UI</h3>
+          <p>Upload, tabs, Plotly charts, and the insights briefing. Talks to the API over <code>/api</code>.</p>
+        </article>
+        <article>
+          <p className="kicker">API</p>
+          <h3>FastAPI</h3>
+          <p>Holds the session table, runs pandas analysis, and returns Plotly JSON plus a 70/30 split preview.</p>
+        </article>
+        <article>
+          <p className="kicker">Intelligence</p>
+          <h3>Open LLM</h3>
+          <p>Groq GPT-OSS / Qwen, or local Ollama. Reads an EDA profile, never the raw CSV.</p>
+        </article>
+      </div>
+      <div className="arch-flow">
+        {[
+          ["CSV", "Upload or sample churn table"],
+          ["Inspect", "Shape, dtypes, summary stats"],
+          ["Quality", "Missing, duplicates, outliers, leakage"],
+          ["Analyze", "Univariate, heatmap, pair plot"],
+          ["Prepare", "Impute, encode, stratified split"],
+          ["Advise", "Insights and model-ready plan"],
+        ].map(([title, detail], i) => (
+          <div className="arch-node" key={title}>
+            <span>{i + 1}</span>
+            <strong>{title}</strong>
+            <small>{detail}</small>
+          </div>
+        ))}
+      </div>
+      <div className="warn">
+        <strong>Leakage rule.</strong> Fit every imputer, encoder, and scaler on the training fold only —
+        never on the full table or the test set.
+      </div>
+    </section>
+  );
+}
 
 function Table({ rows }) {
   if (!rows?.length) return <p className="muted">No rows to show.</p>;
@@ -219,13 +269,16 @@ export default function App() {
       </aside>
 
       <main className="main">
-        <div className="hero">
-          <h1>Magic of Exploratory Data Analysis</h1>
-          <p>
-            Load a CSV, inspect structure and quality, chart every feature, then ask a free open LLM
-            for insights and a model-ready plan. Fit preprocessing on training data only — never on
-            the test fold.
-          </p>
+        <div className="hero-row">
+          <div className="hero">
+            <h1>Magic of Exploratory Data Analysis</h1>
+            <p>
+              Load a CSV, inspect structure and quality, chart every feature, then ask a free open LLM
+              for insights and a model-ready plan. Fit preprocessing on training data only — never on
+              the test fold.
+            </p>
+          </div>
+          <img className="corner-symbol" src={symbol} alt="EDA Studio symbol" />
         </div>
 
         <div className="step-rail">
@@ -245,18 +298,8 @@ export default function App() {
         {error ? <p className="error">{error}</p> : null}
         {busy ? <p className="muted">Working…</p> : null}
 
-        {!profile ? (
-          <div className="panel">
-            <p className="kicker">Start</p>
-            <p>
-              Drop a CSV in the sidebar, or load the bundled customer-churn sample. The sample is
-              messy on purpose: missing cells, duplicate rows, spelling variants, outliers, class
-              imbalance, and a leaky <code>churn_score</code> column.
-            </p>
-          </div>
-        ) : (
-          <>
-            <div className="pills">
+        {profile && q ? (
+          <div className="pills">
               <span className="pill">
                 <span className={`dot ${q.status}`} />
                 Quality {q.status} · score {q.score}/100
@@ -268,7 +311,23 @@ export default function App() {
               <span className="pill">{q.missing.length} columns with missing values</span>
               <span className="pill">{q.leakage.length} leakage flags</span>
             </div>
+        ) : null}
 
+        {tab === 7 ? <Architecture /> : null}
+
+        {!profile && tab !== 7 ? (
+          <div className="panel">
+            <p className="kicker">Start</p>
+            <p>
+              Drop a CSV in the sidebar, or load the bundled customer-churn sample. The sample is
+              messy on purpose: missing cells, duplicate rows, spelling variants, outliers, class
+              imbalance, and a leaky <code>churn_score</code> column.
+            </p>
+          </div>
+        ) : null}
+
+        {profile && tab !== 7 ? (
+          <>
             {tab === 0 && (
               <section>
                 <p className="kicker">Data overview</p>
@@ -565,7 +624,7 @@ export default function App() {
               </section>
             )}
           </>
-        )}
+        ) : null}
       </main>
     </div>
   );
