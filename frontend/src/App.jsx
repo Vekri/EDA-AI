@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
-import Chart from "./Chart.jsx";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { loadSample, postJson, uploadCsv } from "./api.js";
 import symbol from "./assets/symbol.png";
+
+const Chart = lazy(() => import("./Chart.jsx"));
 
 const STEPS = [
   ["1", "Load"],
@@ -412,6 +413,7 @@ export default function App() {
         ) : null}
 
         {profile && tab !== 7 ? (
+          <Suspense fallback={<p className="muted">Loading charts…</p>}>
           <>
             {tab === 0 && (
               <section>
@@ -713,6 +715,7 @@ export default function App() {
               </section>
             )}
           </>
+          </Suspense>
         ) : null}
       </main>
     </div>
