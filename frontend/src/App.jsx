@@ -107,6 +107,17 @@ function md(text) {
   return `<p>${html}</p>`;
 }
 
+function fmtBytes(n) {
+  const x = Number(n) || 0;
+  if (x < 1024) return `${x} B`;
+  if (x < 1024 * 1024) return `${(x / 1024).toFixed(1)} KB`;
+  return `${(x / (1024 * 1024)).toFixed(2)} MB`;
+}
+
+function fmtCount(n) {
+  return Number(n || 0).toLocaleString("en-US");
+}
+
 export default function App() {
   const [tab, setTab] = useState(0);
   const [busy, setBusy] = useState(false);
@@ -122,6 +133,7 @@ export default function App() {
   const [insights, setInsights] = useState("");
   const [provider, setProvider] = useState("Groq (Llama, free API)");
   const [model, setModel] = useState("openai/gpt-oss-20b");
+  const [loadInfo, setLoadInfo] = useState(null);
 
   const kinds = profile?.kinds || { numeric: [], categorical: [], datetime: [] };
   const catOpts = profile?.cat_opts || kinds.categorical || [];
@@ -161,12 +173,49 @@ export default function App() {
   function onFile(ev) {
     const file = ev.target.files?.[0];
     ev.target.value = "";
-    if (!file) return;
-    run(async () => applyProfile(await uploadCsv(file)));
+    if (file) ingestFile(file);
+  }
+
+  function ingestFile(file) {
+    setLoadInfo({
+      name: file.name,
+      bytes: file.size,
+      status: "loading",
+      rows: null,
+      cols: null,
+    });
+    run(async () => {
+      const data = await uploadCsv(file);
+      applyProfile(data);
+      setLoadInfo({
+        name: data.source_name || file.name,
+        bytes: data.source_bytes ?? file.size,
+        status: "ready",
+        rows: data.n_rows,
+        cols: data.n_cols,
+      });
+    });
   }
 
   function onSample() {
-    run(async () => applyProfile(await loadSample()));
+    setLoadInfo({
+      name: "customer_churn.csv",
+      bytes: 0,
+      status: "loading",
+      rows: null,
+      cols: null,
+    });
+    run(async () => {
+      const data = await loadSample();
+      applyProfile(data);
+      setLoadInfo({
+        name: data.source_name,
+        bytes: data.source_bytes,
+        status: "ready",
+        rows: data.n_rows,
+        cols: data.n_cols,
+      });
+    });
   }
 
   function onTarget(next) {
@@ -227,13 +276,39 @@ export default function App() {
           <p className="brand">EDA Studio</p>
           <p>Understand the data before building the model.</p>
         </div>
-        <label className="file-btn">
+        <label
+          className="file-btn"
+          htmlFor="csv-file"
+          onDragOver={(e) => e.preventDefault()}
+          onDrop={(e) => {
+            e.preventDefault();
+            const file = e.dataTransfer.files?.[0];
+            if (file) ingestFile(file);
+          }}
+        >
           Upload CSV
-          <input type="file" accept=".csv,text/csv" onChange={onFile} />
+          <input
+            id="csv-file"
+            type="file"
+            accept=".csv,text/csv,application/vnd.ms-excel"
+            onChange={onFile}
+            disabled={busy}
+          />
         </label>
         <button className="btn ghost" type="button" onClick={onSample} disabled={busy}>
           Load sample churn data
         </button>
+        {loadInfo ? (
+          <div className="load-card">
+            <p className="kicker">{loadInfo.status === "loading" ? "Loading CSV" : "Loaded CSV"}</p>
+            <strong>{loadInfo.name}</strong>
+            <p>
+              {loadInfo.status === "loading"
+                ? `Reading ${fmtBytes(loadInfo.bytes)}… counting records`
+                : `${fmtCount(loadInfo.rows)} records · ${fmtCount(loadInfo.cols)} columns · ${fmtBytes(loadInfo.bytes)}`}
+            </p>
+          </div>
+        ) : null}
         {profile ? (
           <>
             <label>
@@ -296,7 +371,13 @@ export default function App() {
         </div>
 
         {error ? <p className="error">{error}</p> : null}
-        {busy ? <p className="muted">Working…</p> : null}
+        {busy ? (
+          <p className="muted">
+            {loadInfo?.status === "loading"
+              ? `Loading ${loadInfo.name} · ${fmtBytes(loadInfo.bytes)} · counting records…`
+              : "Working…"}
+          </p>
+        ) : null}
 
         {profile && q ? (
           <div className="pills">
@@ -305,7 +386,10 @@ export default function App() {
                 Quality {q.status} · score {q.score}/100
               </span>
               <span className="pill">
-                {q.n_rows} rows × {q.n_cols} columns
+                {fmtCount(q.n_rows)} records × {q.n_cols} columns
+              </span>
+              <span className="pill">
+                {profile.source_size || fmtBytes(profile.source_bytes)} file
               </span>
               <span className="pill">{q.duplicate_rows} duplicate rows</span>
               <span className="pill">{q.missing.length} columns with missing values</span>
@@ -333,22 +417,26 @@ export default function App() {
                 <p className="kicker">Data overview</p>
                 <div className="metrics">
                   <div className="metric">
-                    <span>Rows</span>
-                    <strong>{profile.n_rows}</strong>
+                    <span>Records</span>
+                    <strong>{fmtCount(profile.n_rows)}</strong>
                   </div>
                   <div className="metric">
                     <span>Columns</span>
-                    <strong>{profile.n_cols}</strong>
+                    <strong>{fmtCount(profile.n_cols)}</strong>
+                  </div>
+                  <div className="metric">
+                    <span>CSV size</span>
+                    <strong>{profile.source_size || fmtBytes(profile.source_bytes)}</strong>
                   </div>
                   <div className="metric">
                     <span>Memory</span>
                     <strong>{profile.memory_mb} MB</strong>
                   </div>
-                  <div className="metric">
-                    <span>Source</span>
-                    <strong>{profile.source_name}</strong>
-                  </div>
                 </div>
+                <p className="muted">
+                  Loaded <code>{profile.source_name}</code> — {fmtCount(profile.n_rows)} records,{" "}
+                  {fmtCount(profile.n_cols)} columns, {profile.source_size || fmtBytes(profile.source_bytes)}.
+                </p>
                 <Table rows={profile.preview} />
               </section>
             )}

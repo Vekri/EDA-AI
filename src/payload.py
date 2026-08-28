@@ -66,7 +66,21 @@ def serialize_quality(quality: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def build_profile(df: pd.DataFrame, source_name: str, target: str | None) -> dict[str, Any]:
+def human_size(n: int | float | None) -> str:
+    n = int(n or 0)
+    if n < 1024:
+        return f"{n} B"
+    if n < 1024 * 1024:
+        return f"{n / 1024:.1f} KB"
+    return f"{n / (1024 * 1024):.2f} MB"
+
+
+def build_profile(
+    df: pd.DataFrame,
+    source_name: str,
+    target: str | None,
+    source_bytes: int = 0,
+) -> dict[str, Any]:
     kinds = column_kinds(df)
     guesses = likely_target_columns(df)
     if target is None and guesses:
@@ -100,6 +114,9 @@ def build_profile(df: pd.DataFrame, source_name: str, target: str | None) -> dic
         "source_name": source_name,
         "n_rows": int(df.shape[0]),
         "n_cols": int(df.shape[1]),
+        "n_records": int(df.shape[0]),
+        "source_bytes": int(source_bytes or 0),
+        "source_size": human_size(source_bytes),
         "memory_mb": memory_mb(df),
         "columns": [str(c) for c in df.columns],
         "kinds": kinds,

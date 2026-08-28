@@ -61,6 +61,14 @@ h1, h2, h3, .brand, .hero h1, .kicker {
 }
 .btn:disabled { opacity: 0.55; cursor: not-allowed; }
 .file-btn input { display: none; }
+.load-card {
+  border: 1px solid #3d5368;
+  background: #0B1828;
+  padding: 10px 12px;
+}
+.load-card .kicker { margin: 0 0 4px; color: #5BA8A0; }
+.load-card strong { display: block; color: #F3EEE4; word-break: break-all; }
+.load-card p { margin: 6px 0 0; font-size: 0.84rem; }
 .sidebar select, .sidebar input[type="text"] {
   width: 100%;
   background: #0B1828;

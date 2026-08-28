@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import base64
 import io
 import os
 import uuid
 from typing import Any
+from urllib.parse import unquote
 
 import pandas as pd
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -34,9 +36,11 @@ app.add_middleware(
     allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 SESSIONS: dict[str, dict[str, Any]] = {}
+MAX_UPLOAD_BYTES = 4 * 1024 * 1024
 
 
 class TargetBody(BaseModel):
@@ -64,21 +68,71 @@ class InsightsBody(TargetBody):
     ollama_model: str = "llama3.2"
 
 
-def _session(session_id: str) -> tuple[pd.DataFrame, str]:
+def _session(session_id: str) -> dict[str, Any]:
     item = SESSIONS.get(session_id)
     if not item:
         raise HTTPException(404, "Session expired. Upload the CSV again.")
-    return item["df"], item["name"]
+    return item
 
 
-def _store(df: pd.DataFrame, name: str) -> str:
+def _store(df: pd.DataFrame, name: str, source_bytes: int = 0) -> str:
     sid = str(uuid.uuid4())
-    SESSIONS[sid] = {"df": df, "name": name}
+    SESSIONS[sid] = {"df": df, "name": name, "source_bytes": int(source_bytes or 0)}
     if len(SESSIONS) > 24:
         oldest = next(iter(SESSIONS))
         if oldest != sid:
             SESSIONS.pop(oldest, None)
     return sid
+
+
+def _profile_from_item(item: dict[str, Any], target: str | None, session_id: str) -> dict[str, Any]:
+    profile = build_profile(item["df"], item["name"], target, source_bytes=item.get("source_bytes", 0))
+    profile["session_id"] = session_id
+    return profile
+
+
+def _safe_filename(name: str | None) -> str:
+    cleaned = os.path.basename(unquote(name or "upload.csv")).strip() or "upload.csv"
+    return cleaned.replace("\r", "").replace("\n", "")
+
+
+def _read_csv_bytes(raw: bytes) -> pd.DataFrame:
+    last_err: Exception | None = None
+    for encoding in ("utf-8-sig", "utf-8", "cp1252", "latin-1"):
+        for kwargs in ({}, {"sep": None, "engine": "python"}):
+            try:
+                df = pd.read_csv(io.BytesIO(raw), encoding=encoding, **kwargs)
+                if df.shape[1] == 0:
+                    raise ValueError("No columns found.")
+                return df
+            except Exception as exc:  # noqa: BLE001 — try the next encoding/parser
+                last_err = exc
+    raise HTTPException(400, f"Could not read CSV: {last_err}") from last_err
+
+
+async def _read_upload(request: Request) -> tuple[bytes, str]:
+    ctype = (request.headers.get("content-type") or "").lower()
+    if "multipart/form-data" in ctype:
+        form = await request.form()
+        upload = form.get("file")
+        if not isinstance(upload, UploadFile):
+            raise HTTPException(400, "Please upload a .csv file.")
+        raw = await upload.read()
+        return raw, _safe_filename(upload.filename)
+    if "application/json" in ctype:
+        data = await request.json()
+        name = _safe_filename(str(data.get("filename") or "upload.csv"))
+        if data.get("content_b64"):
+            try:
+                raw = base64.b64decode(data["content_b64"])
+            except Exception as exc:
+                raise HTTPException(400, "Could not decode the CSV payload.") from exc
+        else:
+            raw = str(data.get("content") or "").encode("utf-8")
+        return raw, name
+    raw = await request.body()
+    name = _safe_filename(request.headers.get("x-filename") or "upload.csv")
+    return raw, name
 
 
 def _clean_target(df: pd.DataFrame, target: str | None) -> str | None:
@@ -98,62 +152,64 @@ def health() -> dict[str, str]:
 def load_sample() -> dict[str, Any]:
     path = ensure_sample_csv()
     df = pd.read_csv(path)
-    sid = _store(df, path.name)
-    profile = build_profile(df, path.name, None)
-    profile["session_id"] = sid
-    return profile
+    sid = _store(df, path.name, path.stat().st_size)
+    return _profile_from_item(SESSIONS[sid], None, sid)
 
 
 @app.post("/api/upload")
-async def upload_csv(file: UploadFile = File(...)) -> dict[str, Any]:
-    if not file.filename or not file.filename.lower().endswith(".csv"):
+async def upload_csv(request: Request) -> dict[str, Any]:
+    raw, filename = await _read_upload(request)
+    if not raw:
+        raise HTTPException(400, "The CSV is empty.")
+    if len(raw) > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            413,
+            f"CSV is {len(raw) / (1024 * 1024):.2f} MB. Maximum upload size is 4 MB.",
+        )
+    lower = filename.lower()
+    if lower.endswith((".xlsx", ".xls", ".ods")):
+        raise HTTPException(400, "Please save the sheet as a .csv file, then upload it.")
+    if "." in lower and not lower.endswith(".csv"):
         raise HTTPException(400, "Please upload a .csv file.")
-    raw = await file.read()
-    try:
-        df = pd.read_csv(io.BytesIO(raw))
-    except Exception as exc:
-        raise HTTPException(400, f"Could not read CSV: {exc}") from exc
+    df = _read_csv_bytes(raw)
     if df.empty:
-        raise HTTPException(400, "The CSV has no rows.")
-    sid = _store(df, file.filename)
-    profile = build_profile(df, file.filename, None)
-    profile["session_id"] = sid
-    return profile
+        raise HTTPException(400, "The CSV has headers but no data rows.")
+    sid = _store(df, filename, len(raw))
+    return _profile_from_item(SESSIONS[sid], None, sid)
 
 
 @app.post("/api/profile")
 def refresh_profile(body: TargetBody) -> dict[str, Any]:
-    df, name = _session(body.session_id)
-    target = _clean_target(df, body.target)
-    profile = build_profile(df, name, target)
-    profile["session_id"] = body.session_id
-    return profile
+    item = _session(body.session_id)
+    target = _clean_target(item["df"], body.target)
+    return _profile_from_item(item, target, body.session_id)
 
 
 @app.post("/api/univariate")
 def univariate(body: UnivariateBody) -> dict[str, Any]:
-    df, _ = _session(body.session_id)
-    if body.column not in df.columns:
+    item = _session(body.session_id)
+    if body.column not in item["df"].columns:
         raise HTTPException(400, f"Unknown column: {body.column}")
-    return univariate_payload(df, body.column)
+    return univariate_payload(item["df"], body.column)
 
 
 @app.post("/api/relations")
 def relations(body: RelationsBody) -> dict[str, Any]:
-    df, _ = _session(body.session_id)
-    return relations_payload(df, body.x, body.y, body.color, body.gnum, body.gcat)
+    item = _session(body.session_id)
+    return relations_payload(item["df"], body.x, body.y, body.color, body.gnum, body.gcat)
 
 
 @app.post("/api/prepare")
 def prepare(body: TargetBody) -> dict[str, Any]:
-    df, _ = _session(body.session_id)
-    target = _clean_target(df, body.target)
-    return prepare_payload(df, target)
+    item = _session(body.session_id)
+    target = _clean_target(item["df"], body.target)
+    return prepare_payload(item["df"], target)
 
 
 @app.post("/api/insights")
 def insights(body: InsightsBody) -> dict[str, str]:
-    df, _ = _session(body.session_id)
+    item = _session(body.session_id)
+    df = item["df"]
     target = _clean_target(df, body.target)
     quality = build_quality_report(df, target)
     stats = summary_statistics(df)
