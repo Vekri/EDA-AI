@@ -2,6 +2,18 @@
 name = "eda-ai"
 version = "1.0.0"
 requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.115.0",
+  "uvicorn>=0.30.0",
+  "python-multipart>=0.0.9",
+  "pandas>=2.2.0",
+  "numpy>=1.26.0",
+  "plotly>=5.24.0",
+  "scipy>=1.13.0",
+  "scikit-learn>=1.5.0",
+  "python-dotenv>=1.0.1",
+  "requests>=2.32.0",
+]
 
 [tool.vercel]
 entrypoint = "server:app"
