@@ -298,6 +298,7 @@ export default function App() {
         <button className="btn ghost" type="button" onClick={onSample} disabled={busy}>
           Load sample churn data
         </button>
+        <small>CSV up to 10 MB.</small>
         {loadInfo ? (
           <div className="load-card">
             <p className="kicker">{loadInfo.status === "loading" ? "Loading CSV" : "Loaded CSV"}</p>

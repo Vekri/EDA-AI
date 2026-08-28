@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import gzip
 import io
 import os
 import uuid
@@ -40,7 +41,7 @@ app.add_middleware(
 )
 
 SESSIONS: dict[str, dict[str, Any]] = {}
-MAX_UPLOAD_BYTES = 4 * 1024 * 1024
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 
 
 class TargetBody(BaseModel):
@@ -94,6 +95,15 @@ def _profile_from_item(item: dict[str, Any], target: str | None, session_id: str
 def _safe_filename(name: str | None) -> str:
     cleaned = os.path.basename(unquote(name or "upload.csv")).strip() or "upload.csv"
     return cleaned.replace("\r", "").replace("\n", "")
+
+
+def _maybe_gunzip(raw: bytes) -> bytes:
+    if len(raw) >= 2 and raw[0] == 0x1F and raw[1] == 0x8B:
+        try:
+            return gzip.decompress(raw)
+        except Exception as exc:
+            raise HTTPException(400, "Could not decompress the CSV upload.") from exc
+    return raw
 
 
 def _read_csv_bytes(raw: bytes) -> pd.DataFrame:
@@ -159,13 +169,11 @@ def load_sample() -> dict[str, Any]:
 @app.post("/api/upload")
 async def upload_csv(request: Request) -> dict[str, Any]:
     raw, filename = await _read_upload(request)
+    raw = _maybe_gunzip(raw)
     if not raw:
         raise HTTPException(400, "The CSV is empty.")
     if len(raw) > MAX_UPLOAD_BYTES:
-        raise HTTPException(
-            413,
-            f"CSV is {len(raw) / (1024 * 1024):.2f} MB. Maximum upload size is 4 MB.",
-        )
+        raise HTTPException(413, "CSV is larger than 10 MB. Please use a smaller file.")
     lower = filename.lower()
     if lower.endswith((".xlsx", ".xls", ".ods")):
         raise HTTPException(400, "Please save the sheet as a .csv file, then upload it.")
@@ -174,7 +182,11 @@ async def upload_csv(request: Request) -> dict[str, Any]:
     df = _read_csv_bytes(raw)
     if df.empty:
         raise HTTPException(400, "The CSV has headers but no data rows.")
-    sid = _store(df, filename, len(raw))
+    try:
+        original = int(request.headers.get("x-original-size") or len(raw))
+    except ValueError:
+        original = len(raw)
+    sid = _store(df, filename, original)
     return _profile_from_item(SESSIONS[sid], None, sid)
 
 

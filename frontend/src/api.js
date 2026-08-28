@@ -1,5 +1,6 @@
 const jsonHeaders = { "Content-Type": "application/json" };
-const MAX_UPLOAD_BYTES = 4 * 1024 * 1024;
+const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
+const MAX_WIRE_BYTES = 4.4 * 1024 * 1024;
 
 async function readError(res) {
   try {
@@ -26,17 +27,29 @@ export async function postJson(path, body) {
   return res.json();
 }
 
+async function gzipFile(file) {
+  if (typeof CompressionStream === "undefined") return file;
+  const stream = file.stream().pipeThrough(new CompressionStream("gzip"));
+  return new Response(stream).blob();
+}
+
 export async function uploadCsv(file) {
   if (file.size > MAX_UPLOAD_BYTES) {
-    throw new Error("CSV is larger than 4 MB. Please use a smaller file.");
+    throw new Error("CSV is larger than 10 MB. Please use a smaller file.");
   }
+  const body = await gzipFile(file);
+  if (body.size > MAX_WIRE_BYTES && file.size > MAX_WIRE_BYTES) {
+    throw new Error("CSV is larger than 10 MB. Please use a smaller file.");
+  }
+  const gzipped = body.size < file.size;
   const res = await fetch("/api/upload", {
     method: "POST",
     headers: {
-      "Content-Type": "text/csv",
+      "Content-Type": gzipped ? "application/gzip" : "text/csv",
       "X-Filename": encodeURIComponent(file.name || "upload.csv"),
+      "X-Original-Size": String(file.size),
     },
-    body: file,
+    body: gzipped ? body : file,
   });
   if (!res.ok) throw new Error(await readError(res));
   return res.json();
